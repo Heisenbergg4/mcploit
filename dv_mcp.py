@@ -10,8 +10,8 @@ from exploitation import run_exploit, run_all_exploits
 # Initialize colorama
 init(autoreset=True)
 
-# Target ports for DV-MCP
-VULNERABLE_PORTS = [9001, 9002, 9003, 9005, 9007, 9008, 9010]
+# Target ports for DV-MCP (port 9009 is intentionally non-vulnerable in the challenge set)
+VULNERABLE_PORTS = [9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9010]
 
 def print_mode_header(mode: str):
     """Print the mode header."""
