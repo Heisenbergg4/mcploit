@@ -1,6 +1,5 @@
 """MCPloit MCP Client wrapper with auto-transport detection."""
 
-import os
 from enum import Enum
 from pathlib import Path
 from typing import Any

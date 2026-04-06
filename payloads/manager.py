@@ -7,7 +7,7 @@ across all vulnerability categories.
 
 from typing import Optional
 
-from .base import Payload, PayloadCategory, PayloadSeverity
+from .base import Payload, PayloadSeverity
 from . import (
     prompt_injection,
     tool_poisoning,

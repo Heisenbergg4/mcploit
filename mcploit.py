@@ -2,6 +2,7 @@
 """MCPloit - MCP Security Testing Tool CLI."""
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -680,7 +681,7 @@ def metadata(
 
         try:
             extractor = MetadataExtractor(client=client, source_path=source_path)
-            meta = await extractor.extract()
+            await extractor.extract()
             if output:
                 with open(output, "w") as f:
                     json.dump(extractor.to_dict(), f, indent=2)

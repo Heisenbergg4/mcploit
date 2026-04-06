@@ -19,10 +19,8 @@ Usage:
     tool_findings = await reviewer.review_tool_functions(tool_functions)
 """
 
-import asyncio
 import json
 import os
-from dataclasses import dataclass
 from typing import Optional
 
 from rich.console import Console

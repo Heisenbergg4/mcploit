@@ -10,14 +10,10 @@ Checks:
   6. Response fingerprinting (identify server framework/version)
 """
 
-import asyncio
-import json
-import re
 import socket
 import ssl
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 from urllib.parse import urlparse
 
 from rich.console import Console
@@ -112,7 +108,6 @@ class NetworkScanner:
 
     async def _check_tls(self, host: str, port: int):
         """Check TLS certificate validity."""
-        import datetime
         ctx_strict = ssl.create_default_context()
         ctx_loose = ssl.create_default_context()
         ctx_loose.check_hostname = False

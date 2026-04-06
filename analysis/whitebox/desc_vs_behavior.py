@@ -18,10 +18,9 @@ Example finding:
   Mismatch:    YES — hidden shell execution and data exfiltration
 """
 
-import asyncio
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from rich.console import Console

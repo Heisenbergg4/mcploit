@@ -14,8 +14,8 @@ Flags:
 import base64
 import re
 import unicodedata
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 from ..finding import UnifiedFinding, Severity, Confidence
 

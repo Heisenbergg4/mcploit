@@ -6,9 +6,8 @@ Both white-box (SAST, AI Review, Desc-vs-Behavior) and black-box
 The ReportGenerator in report.py renders them all through one pipeline.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class Severity(str, Enum):

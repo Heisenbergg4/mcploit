@@ -6,7 +6,6 @@ Detects both direct and indirect prompt injection vulnerabilities:
 - Hidden instructions in tool descriptions
 """
 
-import re
 from .base_detector import (
     BaseDetector,
     DetectorContext,
@@ -175,7 +174,6 @@ class PromptInjectionDetector(BaseDetector):
     def _check_resource_for_injection(self, resource):
         """Check a resource for prompt injection vulnerabilities."""
         uri = str(resource.uri)
-        resource_text = self._get_resource_text(resource)
 
         # Check for injectable URI patterns (templated with user input)
         injectable_matches = self._check_text_patterns(
@@ -189,7 +187,7 @@ class PromptInjectionDetector(BaseDetector):
                 confidence=Confidence.HIGH,
                 item_type="resource",
                 item_name=uri,
-                reason=f"Resource URI contains injectable template parameters",
+                reason="Resource URI contains injectable template parameters",
                 details={"uri": uri, "patterns": injectable_matches},
                 exploit_hint="Inject LLM instructions via the URI parameter"
             )
@@ -214,8 +212,6 @@ class PromptInjectionDetector(BaseDetector):
 
     def _check_prompt_for_injection(self, prompt):
         """Check a prompt for injection vulnerabilities."""
-        prompt_text = self._get_prompt_text(prompt)
-
         # Check for hidden instructions
         if prompt.description:
             hidden_matches = self._check_text_patterns(

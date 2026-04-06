@@ -7,7 +7,6 @@ Detects token/authentication theft vulnerabilities:
 - Session management vulnerabilities
 """
 
-import re
 from .base_detector import (
     BaseDetector,
     DetectorContext,
@@ -160,7 +159,7 @@ class TokenTheftDetector(BaseDetector):
                 confidence=Confidence.HIGH,
                 item_type="tool",
                 item_name=tool.name,
-                reason=f"Service status tool may expose tokens in error messages",
+                reason="Service status tool may expose tokens in error messages",
                 details={
                     "token_patterns": token_matches,
                     "service_patterns": service_matches

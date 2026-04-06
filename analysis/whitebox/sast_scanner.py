@@ -890,7 +890,6 @@ class SASTScanner:
 
     def print_results(self, findings: list[SASTFinding] = None):
         """Print findings as a Rich table."""
-        from rich.panel import Panel
         flist = findings or self.findings
 
         severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}

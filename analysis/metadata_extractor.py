@@ -18,13 +18,12 @@ import socket
 import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.tree import Tree
 
 console = Console()
 
@@ -372,9 +371,6 @@ class MetadataExtractor:
             if pkg_name.lower() in server_name_lower or pkg_name.lower() in str(self.metadata.dependencies).lower():
                 # Check version constraint
                 server_ver = self.metadata.version
-                version_constraint = [v for k, v in vuln_info.items() if k.startswith("<")]
-                cve = [v for k, v in vuln_info.items() if "CVE" in k or "GHSA" in v]
-
                 self.metadata.cve_risks.append({
                     "package": pkg_name,
                     "cve": vuln_info.get("<=1.0.0", "See description"),

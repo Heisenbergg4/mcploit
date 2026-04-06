@@ -7,7 +7,6 @@ Detects arbitrary code/command execution vulnerabilities:
 - Unsafe parameter handling
 """
 
-import re
 from .base_detector import (
     BaseDetector,
     DetectorContext,
@@ -202,7 +201,7 @@ class CodeExecutionDetector(BaseDetector):
                         "injectable_params": injectable_params,
                         "shell_indicators": shell_indicators
                     },
-                    exploit_hint=f"Inject commands via parameters using ; or && - e.g., '127.0.0.1; cat /etc/passwd'"
+                    exploit_hint="Inject commands via parameters using ; or && - e.g., '127.0.0.1; cat /etc/passwd'"
                 )
             elif injectable_params:
                 # LOW confidence: network tool with injectable params but no shell indicators
@@ -225,8 +224,6 @@ class CodeExecutionDetector(BaseDetector):
         # Check for format/template parameters (eval injection)
         if tool.inputSchema and "properties" in tool.inputSchema:
             for param_name, param_info in tool.inputSchema["properties"].items():
-                param_text = f"{param_name} {param_info.get('description', '')}"
-
                 # Check for format/template parameters
                 if any(p in param_name.lower() for p in ["format", "template", "expression", "code", "script"]):
                     self._add_vulnerability(

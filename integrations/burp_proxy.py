@@ -6,12 +6,10 @@ making every request interceptable, repeatable, and modifiable.
 Supports autonomous testing with request/response logging in Burp format.
 """
 
-import asyncio
 import json
 import ssl
 import time
-import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 

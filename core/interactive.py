@@ -3,7 +3,6 @@
 import asyncio
 import json
 import shlex
-import sys
 from typing import Callable
 
 from rich.console import Console

@@ -15,7 +15,6 @@ from .detectors.base_detector import (
     DetectorContext,
     Vulnerability,
     Severity,
-    Confidence,
 )
 from .detectors.prompt_injection import PromptInjectionDetector
 from .detectors.path_traversal import PathTraversalDetector

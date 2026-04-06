@@ -8,7 +8,6 @@ Detects potential secrets/credentials exposure:
 - AWS/cloud credentials
 """
 
-import re
 from .base_detector import (
     BaseDetector,
     DetectorContext,

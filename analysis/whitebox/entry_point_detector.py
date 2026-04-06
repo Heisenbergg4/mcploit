@@ -13,7 +13,6 @@ Detection heuristics (in priority order):
 
 import re
 from pathlib import Path
-from typing import Optional
 
 
 # Patterns that strongly indicate an MCP server entry point

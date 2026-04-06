@@ -183,7 +183,6 @@ class TyposquattingDetector(BaseDetector):
 
     def _check_tool_name(self, tool) -> None:
         """Check tool names for suspicious patterns."""
-        tool_name = tool.name.lower()
         tool_desc = (tool.description or "").lower()
 
         # Check if tool description indicates impersonation

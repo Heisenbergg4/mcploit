@@ -18,11 +18,9 @@ Modes:
 All findings flow through UnifiedFinding → ReportGenerator.
 """
 
-import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 
@@ -151,7 +149,7 @@ class AnalysisEngine:
                 api_key=self.config.api_key,
                 use_ai=self.config.run_ai,
             )
-            desc_results = await checker.analyze(tool_functions)
+            await checker.analyze(tool_functions)
             checker.print_table()
             findings.extend(checker.to_findings())
 

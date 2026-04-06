@@ -20,16 +20,12 @@ Timing-based detection:
 """
 
 import asyncio
-import hashlib
-import os
 import re
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from ..finding import UnifiedFinding, Severity, Confidence
 

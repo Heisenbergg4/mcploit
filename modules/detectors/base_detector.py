@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 
 class Severity(str, Enum):
@@ -122,7 +121,6 @@ class BaseDetector(ABC):
 
     def _get_prompt_text(self, prompt) -> str:
         """Extract all text from a prompt for analysis."""
-        import json
         parts = [prompt.name]
         if prompt.description:
             parts.append(prompt.description)

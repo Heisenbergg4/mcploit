@@ -11,14 +11,12 @@ import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
-from .finding import UnifiedFinding, Severity, SEVERITY_COLORS, SEVERITY_ORDER
+from .finding import UnifiedFinding, Severity, SEVERITY_COLORS
 
 console = Console()
 
@@ -250,8 +248,8 @@ class ReportGenerator:
             lines.append(f"### {anchor}")
             lines.append(f"#### {emoji} {f.id}: {f.title}{ai_tag}{cve_badge}")
             lines.append("")
-            lines.append(f"| Field | Value |")
-            lines.append(f"|-------|-------|")
+            lines.append("| Field | Value |")
+            lines.append("|-------|-------|")
             lines.append(f"| **Severity** | {f.severity.value} |")
             lines.append(f"| **Confidence** | {f.confidence.value} |")
             lines.append(f"| **Source** | {f.source} |")

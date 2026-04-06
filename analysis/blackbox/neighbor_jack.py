@@ -20,12 +20,10 @@ Checks performed:
 """
 
 import asyncio
-import json
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
 from urllib.parse import urlparse
 
 try:
@@ -277,9 +275,7 @@ class NeighborJackTester:
     def _is_protocol_boilerplate(event_data: str) -> bool:
         """Return True if the SSE data line is standard MCP transport boilerplate."""
         stripped = event_data.strip()
-        if stripped in MCPJamInspectorExploit._SSE_PROTOCOL_EVENTS if False else (
-            stripped in NeighborJackTester._SSE_PROTOCOL_EVENTS
-        ):
+        if stripped in NeighborJackTester._SSE_PROTOCOL_EVENTS:
             return True
         for prefix in NeighborJackTester._SSE_PROTOCOL_PREFIXES:
             if prefix in stripped:

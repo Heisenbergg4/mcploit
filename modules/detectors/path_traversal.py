@@ -7,7 +7,6 @@ Detects file system access vulnerabilities:
 - Excessive file permissions
 """
 
-import re
 from .base_detector import (
     BaseDetector,
     DetectorContext,
@@ -224,7 +223,6 @@ class PathTraversalDetector(BaseDetector):
     def _check_resource_for_traversal(self, resource):
         """Check a resource for path traversal vulnerabilities."""
         uri = str(resource.uri)
-        resource_text = self._get_resource_text(resource)
 
         # Check for file:// URIs
         file_uri_matches = self._check_text_patterns(uri, self.FILE_URI_PATTERNS)
