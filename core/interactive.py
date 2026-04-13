@@ -89,7 +89,7 @@ class InteractiveShell:
             ("list-resources [lr]", "List all available resources", "list-resources"),
             ("list-prompts  [lp]", "List all available prompts", "list-prompts"),
             ("call-tool    [ct]", "Call a tool with arguments",
-             "call-tool <name> [key=val ...] OR '{\"key\":\"val\"}'"),
+             "call-tool <name> [key=val ...]'{\"key\":\"val\"}'"),
             ("read-resource [rr]", "Read a resource by URI", "read-resource <uri>"),
             ("get-prompt   [gp]", "Get a rendered prompt", "get-prompt <name> [key=val]"),
             ("info", "Show server information", "info"),
