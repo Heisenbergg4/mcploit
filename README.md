@@ -9,6 +9,7 @@ A security testing tool for MCP (Model Context Protocol) servers. Built to enume
 MCP servers are increasingly being used to give LLMs access to tools, files, and external services. That also makes them an attack surface. MCPloit lets you:
 
 - **Enumerate** what tools, resources, and prompts a server exposes
+- **Connect** to MCP servers for manual testing, custom payload execution, and studying tool behavior
 - **Scan** for common vulnerabilities passively (no active probing)
 - **Audit** source code with SAST rules + optional Claude AI review
 - **Exploit** specific vulnerabilities with a library of 99 payloads
