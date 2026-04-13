@@ -13,7 +13,6 @@ MCP servers are increasingly being used to give LLMs access to tools, files, and
 - **Scan** for common vulnerabilities passively (no active probing)
 - **Audit** source code with SAST rules + optional Claude AI review
 - **Exploit** specific vulnerabilities with a library of 99 payloads
-- **Test** CVE-specific attack paths against known vulnerable servers
 
 ---
 
@@ -28,38 +27,141 @@ pip install -r requirements.txt
 ```
 
 Optional — needed only for `--ai` flag:
+
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ---
 
-## Usage
+# Usage
 
 ### Connect to a server (interactive shell)
+
 ```bash
 python3 mcploit.py connect http://localhost:9001/sse
 python3 mcploit.py connect ./server.py          # STDIO
 ```
 
+---
+
+# Interactive Shell (Manual Testing)
+
+After connecting to a server, MCPloit launches an **interactive shell** for manual exploration and testing of MCP capabilities.
+
+### Example
+
+```bash
+python3 mcploit.py connect https://huggingface.co/mcp
+```
+
+or with `uv`:
+
+```bash
+uv run mcploit.py connect https://huggingface.co/mcp
+```
+
+You will enter the MCPloit shell:
+
+```bash
+mcploit>
+```
+
+---
+
+## Available Commands
+
+| Command | Description |
+|--------|-------------|
+| `list-tools` | List all tools exposed by the MCP server |
+| `list-resources` | List accessible resources |
+| `list-prompts` | List available prompts |
+| `call-tool` | Invoke a tool with arguments |
+| `read-resource` | Retrieve resource content |
+| `get-prompt` | Render a prompt template |
+| `info` | Display server metadata |
+| `history` | Show command history |
+| `clear` | Clear the screen |
+| `exit` / `q` | Exit the shell |
+
+---
+
+## Example Workflow
+
+List available tools:
+
+```bash
+mcploit> list-tools
+```
+
+Example output:
+
+```
+evaluate_expression
+read_file
+store_password
+```
+
+Call a tool:
+
+```bash
+mcploit> call-tool evaluate_expression {"expression":"2+2"}
+```
+
+Read a resource:
+
+```bash
+mcploit> read-resource file:///etc/passwd
+```
+
+Render a prompt template:
+
+```bash
+mcploit> get-prompt summarize
+```
+
+---
+
+## Why Use the Interactive Shell
+
+This mode is useful for:
+
+- Manual reconnaissance of MCP servers  
+- Understanding tool schemas and parameters  
+- Testing custom payloads  
+- Verifying vulnerabilities discovered by automated scans  
+- Observing real-time MCP server behavior
+
+---
+
 ### Enumerate capabilities
+
 ```bash
 python3 mcploit.py enum http://localhost:9001/sse
 python3 mcploit.py enum ./server.py -o results.json
 ```
 
+---
+
 ### Passive vulnerability scan
+
 ```bash
 python3 mcploit.py scan http://localhost:9001/sse
 python3 mcploit.py scan ./server.py -d prompt_injection,code_execution
 ```
 
+---
+
 ### Scan with active probing (confirms vulnerabilities)
+
 ```bash
 python3 mcploit.py scan http://localhost:9001/sse --probe --schema
 ```
 
+---
+
 ### Audit source code
+
 ```bash
 # SAST only (fast, no API key needed)
 python3 mcploit.py audit ./server-src/ --sast-only
@@ -68,7 +170,10 @@ python3 mcploit.py audit ./server-src/ --sast-only
 python3 mcploit.py audit ./server-src/ --ai --markdown report.md
 ```
 
+---
+
 ### Run exploits
+
 ```bash
 # Auto-run all payloads for a module
 python3 mcploit.py exploit http://localhost:9001/sse -m prompt_injection --auto
@@ -80,13 +185,10 @@ python3 mcploit.py exploit http://localhost:9001/sse -m path_traversal --interac
 python3 mcploit.py exploit http://localhost:9008/sse -m rce --tool evaluate_expression --auto
 ```
 
-### CVE-specific exploits
-```bash
-python3 mcploit.py cve-exploit http://localhost:9001/sse --cve CVE-2025-67366
-python3 mcploit.py cve-exploit http://localhost:9009/sse --cve CVE-2026-0755
-```
+---
 
 ### Full assessment
+
 ```bash
 python3 mcploit.py full-scan http://localhost:9001/sse \
   --source ./server-src/ --ai --probe --accept-disclaimer \
@@ -95,7 +197,7 @@ python3 mcploit.py full-scan http://localhost:9001/sse \
 
 ---
 
-## Module aliases
+# Module aliases
 
 | Alias | Module |
 |-------|--------|
@@ -109,7 +211,7 @@ python3 mcploit.py full-scan http://localhost:9001/sse \
 
 ---
 
-## Payload library
+# Payload library
 
 99 payloads across 7 categories. List them with:
 
@@ -120,7 +222,7 @@ python3 mcploit.py payloads show rce
 
 ---
 
-## White-box analysis pipeline
+# White-box analysis pipeline
 
 When you point `audit` at source code, it runs three layers:
 
@@ -130,7 +232,7 @@ When you point `audit` at source code, it runs three layers:
 
 ---
 
-## Supported transports
+# Supported transports
 
 - **STDIO** — Python or Node.js scripts (`./server.py`, `./server.js`)
 - **SSE** — `http://host/sse`
@@ -139,29 +241,7 @@ When you point `audit` at source code, it runs three layers:
 
 ---
 
-## CVEs covered
-
-| CVE | Server | Vulnerability |
-|-----|--------|---------------|
-| CVE-2025-67366 | filesystem-mcp | Path traversal |
-| CVE-2026-0755 | gemini-mcp-tool | Command injection |
-| CVE-2026-23744 | MCPJam Inspector | RCE |
-
----
-
-## Burp Suite
-
-Route traffic through Burp for interception and replay:
-
-```bash
-python3 mcploit.py scan http://localhost:9001/sse --probe --burp-host 127.0.0.1 --burp-port 8080
-```
-
-Requests are also logged to `burp_mcploit.log` in Burp-importable JSON format.
-
----
-
-## Notes
+# Notes
 
 - `--probe` and `--run-cve` require `--accept-disclaimer` (or `MCPLOIT_ACCEPTED_DISCLAIMER=1`)
 - Default mode is safe — canary payloads only, no writes, no shells
@@ -171,6 +251,6 @@ Requests are also logged to `burp_mcploit.log` in Burp-importable JSON format.
 
 ---
 
-## License
+# License
 
 For authorized security testing only.
