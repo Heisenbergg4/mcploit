@@ -66,18 +66,23 @@ mcploit>
 
 ## Available Commands
 
-| Command | Description |
-|--------|-------------|
-| `list-tools` | List all tools exposed by the MCP server |
-| `list-resources` | List accessible resources |
-| `list-prompts` | List available prompts |
-| `call-tool` | Invoke a tool with arguments |
-| `read-resource` | Retrieve resource content |
-| `get-prompt` | Render a prompt template |
-| `info` | Display server metadata |
-| `history` | Show command history |
-| `clear` | Clear the screen |
-| `exit` / `q` | Exit the shell |
+```
+                                   Available Commands
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Command         ┃ Description                  ┃ Usage                                ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ list-tools      │ List all available tools     │ list-tools                           │
+│ list-resources  │ List all available resources │ list-resources                       │
+│ list-prompts    │ List all available prompts   │ list-prompts                         │
+│ call-tool       │ Call a tool with arguments   │ call-tool <name>  OR '{"key":"val"}' │
+│ read-resource   │ Read a resource by URI       │ read-resource <uri>                  │
+│ get-prompt      │ Get a rendered prompt        │ get-prompt <name>                    │
+│ info            │ Show server information      │ info                                 │
+│ history         │ Show command history         │ history                              │
+│ clear           │ Clear the screen             │ clear                                │
+│ exit / q        │ Exit interactive shell       │ exit                                 │
+└─────────────────┴──────────────────────────────┴──────────────────────────────────────┘
+```
 
 ---
 
