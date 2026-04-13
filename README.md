@@ -74,7 +74,7 @@ mcploit>
 │ list-tools      │ List all available tools     │ list-tools                           │
 │ list-resources  │ List all available resources │ list-resources                       │
 │ list-prompts    │ List all available prompts   │ list-prompts                         │
-│ call-tool       │ Call a tool with arguments   │ call-tool <name>  OR '{"key":"val"}' │
+│ call-tool       │ Call a tool with arguments   │ call-tool <name> '{"key":"val"}' │
 │ read-resource   │ Read a resource by URI       │ read-resource <uri>                  │
 │ get-prompt      │ Get a rendered prompt        │ get-prompt <name>                    │
 │ info            │ Show server information      │ info                                 │
