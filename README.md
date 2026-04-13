@@ -105,7 +105,7 @@ store_password
 Call a tool:
 
 ```bash
-mcploit> call-tool evaluate_expression {"expression":"2+2"}
+mcploit> call-tool evaluate_expression '{"expression":"2+2"}'
 ```
 
 Read a resource:
