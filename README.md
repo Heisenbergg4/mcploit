@@ -55,11 +55,6 @@ After connecting to a server, MCPloit launches an **interactive shell** for manu
 python3 mcploit.py connect https://huggingface.co/mcp
 ```
 
-or with `uv`:
-
-```bash
-uv run mcploit.py connect https://huggingface.co/mcp
-```
 
 You will enter the MCPloit shell:
 
