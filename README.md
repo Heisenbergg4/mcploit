@@ -105,19 +105,19 @@ store_password
 Call a tool:
 
 ```bash
-mcploit> call-tool evaluate_expression '{"expression":"2+2"}'
+mcploit> call-tool tool-name '{parameter:value}'
 ```
 
 Read a resource:
 
 ```bash
-mcploit> read-resource file:///etc/passwd
+mcploit> read-resource resource-uri
 ```
 
 Render a prompt template:
 
 ```bash
-mcploit> get-prompt summarize
+mcploit> get-prompt '{parameter:value}'
 ```
 
 ---
