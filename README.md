@@ -117,7 +117,7 @@ mcploit> read-resource resource-uri
 Render a prompt template:
 
 ```bash
-mcploit> get-prompt '{parameter:value}'
+mcploit> get-prompt prompt-name '{parameter:value}'
 ```
 
 ---
