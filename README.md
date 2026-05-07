@@ -251,6 +251,3 @@ When you point `audit` at source code, it runs three layers:
 
 ---
 
-# License
-
-For authorized security testing only.
