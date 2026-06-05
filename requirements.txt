@@ -22,5 +22,10 @@ anthropic>=0.34.0          # required for --ai flag; optional otherwise
 # ── Async ─────────────────────────────────────────────────────────────────
 anyio>=4.4.0
 
+# ── Interactive shell line editing (history + tab completion) ──────────────
+# readline ships with CPython on Linux/macOS. On Windows it is not bundled,
+# so install pyreadline3 there to get the up/down history and Tab completion.
+pyreadline3>=3.4.1; sys_platform == "win32"
+
 # ── Standard library supplements ──────────────────────────────────────────
 # (ast, re, ssl, socket, pathlib, dataclasses, enum — all stdlib, no install needed)

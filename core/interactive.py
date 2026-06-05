@@ -2,8 +2,21 @@
 
 import asyncio
 import json
+import os
 import shlex
 from typing import Callable
+
+# readline gives us line editing, ↑/↓ history traversal and tab-completion for
+# free on the platform's input(). It ships with CPython on Linux/macOS; on
+# Windows it lives in the optional `pyreadline3` package. If neither is present
+# the shell still works — it just loses history/completion niceties.
+try:
+    import readline
+except ImportError:  # pragma: no cover - Windows without pyreadline3
+    try:
+        import pyreadline3 as readline  # type: ignore
+    except ImportError:
+        readline = None
 
 from rich.console import Console
 from rich.panel import Panel
@@ -11,6 +24,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+from utils.logger import log
 from utils.output import print_success, print_error, print_warning, print_info
 
 
@@ -41,6 +55,21 @@ class InteractiveShell:
         self.client = client
         self.running = False
         self.history = []
+
+        # ── Tab-completion state ────────────────────────────────────────────
+        # Names are cached once at startup (and after the relevant list-*
+        # commands) so the synchronous readline completer has data to offer
+        # without needing to make async calls mid-keystroke.
+        self._tool_names: list[str] = []
+        self._resource_uris: list[str] = []
+        self._prompt_names: list[str] = []
+        self._completion_matches: list[str] = []
+
+        # Persist ↑/↓ history across sessions (best-effort).
+        self._history_file = os.path.join(
+            os.path.expanduser("~"), ".mcploit_history"
+        )
+
         self.commands: dict[str, Callable] = {
             # Full names
             "help": self._cmd_help,
@@ -75,6 +104,12 @@ class InteractiveShell:
         banner.append(" for available commands, ", style="dim")
         banner.append("exit", style="cyan")
         banner.append(" to quit", style="dim")
+        if readline is not None:
+            banner.append("\n", style="dim")
+            banner.append("↑/↓", style="cyan")
+            banner.append(" history  ·  ", style="dim")
+            banner.append("Tab", style="cyan")
+            banner.append(" to complete commands, tools & resources", style="dim")
         console.print(Panel(banner, border_style="red"))
 
     async def _cmd_help(self, args: list[str]):
@@ -442,6 +477,118 @@ class InteractiveShell:
         self.running = False
         print_info("Exiting interactive shell...")
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Line editing: history (↑/↓) and tab-completion
+    # ──────────────────────────────────────────────────────────────────────
+    def _setup_readline(self):
+        """Enable ↑/↓ history traversal and Tab completion for input().
+
+        Safe no-op when no readline implementation is available.
+        """
+        if readline is None:
+            return
+        try:
+            # Treat only whitespace as a word boundary. The default delim set
+            # includes '-', ':' and '/', which would wrongly split tokens like
+            # "list-tools" or "resource://logs" mid-word during completion.
+            readline.set_completer_delims(" \t\n")
+            readline.set_completer(self._completer)
+
+            # GNU readline and the libedit shim (common on macOS) use different
+            # syntax to bind the Tab key to completion.
+            if "libedit" in (getattr(readline, "__doc__", "") or ""):
+                readline.parse_and_bind("bind ^I rl_complete")
+            else:
+                readline.parse_and_bind("tab: complete")
+
+            readline.set_history_length(1000)
+            try:
+                readline.read_history_file(self._history_file)
+            except (FileNotFoundError, OSError):
+                pass
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug(f"readline setup skipped: {e}")
+
+    def _teardown_readline(self):
+        """Persist history to disk on exit (best-effort)."""
+        if readline is None:
+            return
+        try:
+            readline.write_history_file(self._history_file)
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug(f"Could not write history file: {e}")
+
+    def _completer(self, text: str, state: int):
+        """readline completion callback.
+
+        Called repeatedly with increasing ``state`` until it returns None.
+        We compute the full candidate list on state 0 and index into it after.
+        """
+        if readline is None:
+            return None
+        try:
+            if state == 0:
+                self._completion_matches = self._compute_completions(text)
+            if 0 <= state < len(self._completion_matches):
+                return self._completion_matches[state]
+            return None
+        except Exception:  # pragma: no cover - never let completion crash input
+            return None
+
+    def _compute_completions(self, text: str) -> list[str]:
+        """Return completion candidates for the word currently being typed.
+
+        - First word  → command names (and aliases).
+        - call-tool / ct  <TAB>   → live tool names.
+        - read-resource / rr <TAB> → live resource URIs.
+        - get-prompt / gp <TAB>   → live prompt names.
+        """
+        buffer = readline.get_line_buffer()
+        begidx = readline.get_begidx()
+        # Tokens that appear *before* the word being completed.
+        preceding = buffer[:begidx].split()
+
+        if not preceding:
+            # Completing the command itself.
+            pool = sorted(self.commands.keys())
+        elif len(preceding) == 1:
+            # Completing the first argument right after the command.
+            cmd = preceding[0].lower()
+            if cmd in ("call-tool", "ct"):
+                pool = self._tool_names
+            elif cmd in ("read-resource", "rr"):
+                pool = self._resource_uris
+            elif cmd in ("get-prompt", "gp"):
+                pool = self._prompt_names
+            else:
+                pool = []
+        else:
+            # Deeper arguments (JSON / key=value) — nothing sensible to offer.
+            pool = []
+
+        return [c for c in pool if c.startswith(text)]
+
+    async def _refresh_completion_cache(self):
+        """Pre-fetch tool/resource/prompt names for tab-completion.
+
+        Each lookup is isolated so a server that lacks one capability (or errors
+        on it) doesn't wipe out completion for the others.
+        """
+        try:
+            self._tool_names = [t.name for t in await self.client.list_tools()]
+        except Exception:
+            self._tool_names = []
+        try:
+            self._resource_uris = [
+                str(r.uri) for r in await self.client.list_resources()
+            ]
+        except Exception:
+            self._resource_uris = []
+        try:
+            self._prompt_names = [p.name for p in await self.client.list_prompts()]
+        except Exception:
+            self._prompt_names = []
+
     def _parse_command(self, line: str) -> tuple[str, list[str]]:
         """Parse command line into command and arguments.
 
@@ -470,40 +617,48 @@ class InteractiveShell:
         """Run the interactive shell."""
         self.running = True
         self._print_banner()
+        self._setup_readline()
+        # Warm the completion cache so Tab works from the first keystroke.
+        await self._refresh_completion_cache()
 
-        while self.running:
-            try:
-                # _async_input runs input() in a thread executor so we don't
-                # block the asyncio event loop (plain Prompt.ask / input() would).
-                line = await _async_input("mcploit")
+        try:
+            while self.running:
+                try:
+                    # _async_input runs input() in a thread executor so we don't
+                    # block the asyncio event loop (plain Prompt.ask / input() would).
+                    # readline hooks into that input() call, giving ↑/↓ history
+                    # and Tab completion transparently.
+                    line = await _async_input("mcploit")
 
-                if not line.strip():
-                    continue
+                    if not line.strip():
+                        continue
 
-                # Parse command
-                cmd, args = self._parse_command(line)
+                    # Parse command
+                    cmd, args = self._parse_command(line)
 
-                if not cmd:
-                    continue
+                    if not cmd:
+                        continue
 
-                # Add to history
-                self.history.append(line)
+                    # Add to history
+                    self.history.append(line)
 
-                # Execute command
-                if cmd in self.commands:
-                    await self.commands[cmd](args)
-                else:
-                    print_error(f"Unknown command: {cmd}")
-                    print_info("Type 'help' or 'h' for available commands")
+                    # Execute command
+                    if cmd in self.commands:
+                        await self.commands[cmd](args)
+                    else:
+                        print_error(f"Unknown command: {cmd}")
+                        print_info("Type 'help' or 'h' for available commands")
 
-            except KeyboardInterrupt:
-                console.print()
-                print_info("Use 'exit' or 'q' to quit")
-            except EOFError:
-                # Ctrl+D / pipe closed
-                self.running = False
-                break
-            except Exception as e:
-                print_error(f"Error: {e}")
+                except KeyboardInterrupt:
+                    console.print()
+                    print_info("Use 'exit' or 'q' to quit")
+                except EOFError:
+                    # Ctrl+D / pipe closed
+                    self.running = False
+                    break
+                except Exception as e:
+                    print_error(f"Error: {e}")
+        finally:
+            self._teardown_readline()
 
         console.print()

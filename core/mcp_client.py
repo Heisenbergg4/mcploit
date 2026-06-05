@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from fastmcp import Client
 from fastmcp.client.transports import (
     PythonStdioTransport,
@@ -214,14 +215,113 @@ class MCPClient:
 
         raise ValueError(f"Unknown transport type: {self.transport_type}")
 
+    async def _preflight_http(self) -> str | None:
+        """Quick reachability check for HTTP/SSE targets.
+
+        Distinguishes "host is down / wrong address" (a connection-level
+        failure) from "host is up but not speaking MCP" (which the handshake
+        will surface). Returns a user-facing error string if the host cannot be
+        reached at all, otherwise None.
+
+        Any HTTP response — even 404/405 — counts as "reachable"; we only treat
+        transport-level failures (refused, DNS, timeout) as "not found".
+        """
+        try:
+            async with httpx.AsyncClient(
+                timeout=8.0, follow_redirects=True
+            ) as probe:
+                await probe.get(self.target, headers=self.headers or None)
+            return None
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            return (
+                f"MCP server not found at '{self.target}'.\n"
+                f"  The host refused the connection or could not be resolved. "
+                f"Check the URL, port, and that the server is actually running."
+            )
+        except (httpx.ReadTimeout, httpx.PoolTimeout, httpx.TimeoutException):
+            return (
+                f"MCP server not found at '{self.target}'.\n"
+                f"  The host did not respond in time. Check the address and "
+                f"your network connection."
+            )
+        except httpx.InvalidURL:
+            return f"Invalid server URL: '{self.target}'."
+        except Exception:
+            # Anything else (e.g. an actual HTTP response wrapped oddly) means
+            # the host responded — let the real MCP handshake judge it.
+            return None
+
+    def _friendly_connection_error(self, exc: Exception) -> str:
+        """Translate a raw handshake exception into a clear, actionable message.
+
+        Walks the exception's cause/context chain to find a recognisable
+        transport error; otherwise reports that the endpoint responded but does
+        not appear to speak MCP.
+        """
+        is_network = self.transport_type in (TransportType.HTTP, TransportType.SSE)
+
+        # Unwind the chain: the useful httpx error is often a __cause__.
+        chain: list[BaseException] = []
+        seen: set[int] = set()
+        cur: BaseException | None = exc
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            chain.append(cur)
+            cur = cur.__cause__ or cur.__context__
+
+        for e in chain:
+            if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+                return (
+                    f"MCP server not found at '{self.target}'. "
+                    f"The host refused the connection or could not be resolved."
+                )
+            if isinstance(e, (httpx.ReadTimeout, httpx.TimeoutException)):
+                return (
+                    f"Timed out talking to '{self.target}'. "
+                    f"The host is reachable but not responding to MCP requests."
+                )
+            if isinstance(e, httpx.HTTPStatusError):
+                code = e.response.status_code
+                return (
+                    f"'{self.target}' responded with HTTP {code}, not a valid "
+                    f"MCP handshake. This does not look like an MCP server "
+                    f"endpoint — check the path (servers commonly expose MCP "
+                    f"under '/mcp' or '/sse')."
+                )
+
+        if is_network:
+            return (
+                f"'{self.target}' is reachable but the MCP handshake failed — "
+                f"this does not appear to be an MCP server. Verify the URL and "
+                f"path (e.g. '/mcp' or '/sse')."
+            )
+        return f"Failed to start MCP server '{self.target}': {exc}"
+
     async def connect(self) -> bool:
         """Establish connection to MCP server.
 
         Returns:
             True if connection successful, False otherwise.
         """
+        # Build the transport first so transport_type is resolved from AUTO and
+        # target-shape errors (missing file, bad directory) are reported clearly.
         try:
             transport = self._create_transport()
+        except (FileNotFoundError, ValueError) as e:
+            print_error(str(e))
+            self._connected = False
+            return False
+
+        # For network transports, fail fast with a clear "not found" message if
+        # the host can't be reached at all, before attempting the MCP handshake.
+        if self.transport_type in (TransportType.HTTP, TransportType.SSE):
+            unreachable = await self._preflight_http()
+            if unreachable:
+                print_error(unreachable)
+                self._connected = False
+                return False
+
+        try:
             self._client = Client(transport)
 
             print_info(f"Connecting to {self.target} via {self.transport_type.value}...")
@@ -250,9 +350,18 @@ class MCPClient:
             return True
 
         except Exception as e:
-            print_error(f"Connection failed: {e}")
-            log.exception("Connection error")
+            # Turn the raw transport/handshake exception into something the user
+            # can act on (e.g. "not an MCP server" vs "host unreachable").
+            print_error(self._friendly_connection_error(e))
+            log.debug("Connection error", exc_info=True)
             self._connected = False
+            # Best-effort cleanup so a half-open client isn't left dangling.
+            if self._client is not None:
+                try:
+                    await self._client.__aexit__(type(e), e, e.__traceback__)
+                except Exception:
+                    pass
+                self._client = None
             return False
 
     async def disconnect(self):
