@@ -61,9 +61,11 @@ class InteractiveShell:
         # commands) so the synchronous readline completer has data to offer
         # without needing to make async calls mid-keystroke.
         self._tool_names: list[str] = []
+        self._tools: list = []
         self._resource_uris: list[str] = []
         self._prompt_names: list[str] = []
         self._completion_matches: list[str] = []
+        self._raw_line: str = ""
 
         # Persist ↑/↓ history across sessions (best-effort).
         self._history_file = os.path.join(
@@ -124,7 +126,7 @@ class InteractiveShell:
             ("list-resources [lr]", "List all available resources", "list-resources"),
             ("list-prompts  [lp]", "List all available prompts", "list-prompts"),
             ("call-tool    [ct]", "Call a tool with arguments",
-             "call-tool <name> [key=val ...]'{\"key\":\"val\"}'"),
+             "call-tool <name> <val> | key=val | '{\"k\":\"v\"}'"),
             ("read-resource [rr]", "Read a resource by URI", "read-resource <uri>"),
             ("get-prompt   [gp]", "Get a rendered prompt", "get-prompt <name> [key=val]"),
             ("info", "Show server information", "info"),
@@ -232,65 +234,148 @@ class InteractiveShell:
             print_error(f"Failed to list prompts: {e}")
 
     @staticmethod
-    def _parse_tool_args(args: list[str]) -> dict:
-        """Parse tool arguments from CLI tokens.
+    def _parse_tool_args(raw: str, param_names: list[str] | None = None) -> dict:
+        """Parse a tool call's raw argument string.
 
-        Accepts two formats:
-          1. JSON string  : {"key": "val"}   (must be one quoted token on Windows,
-                            or the last N unquoted tokens that together form valid JSON)
-          2. key=value pairs: key1=val1 key2=val2   (values auto-typed: int/float/bool/str)
+        ``raw`` is the portion of the command line *after the tool name*, passed
+        verbatim — it is NOT shlex-tokenised — so payloads keep their exact
+        spacing, quotes, backslashes and shell metacharacters intact. This is
+        what lets values like ``whoami;cat  flag.txt`` or ``echo \\$HOME`` reach
+        the server unchanged.
 
-        Returns parsed dict or raises ValueError with a helpful message.
+        Formats, tried in order:
+          1. JSON object   : {"key": "val"}
+          2. key=value     : key1=val1 key2=val2   (whitespace-separated)
+          3. positional    : mapped onto the tool's parameters in declaration
+                             order. A single-parameter tool receives the ENTIRE
+                             raw string as its one value.
+
+        ``param_names`` is the ordered list of the tool's parameter names (from
+        its input schema). It enables positional mapping and makes key=value
+        parsing stricter, so a value that itself contains '=' (e.g. a URL with a
+        query string) isn't mistaken for a key=value pair.
+
+        Returns the parsed dict, or raises ValueError with a helpful message.
         """
-        if not args:
+        raw = raw.strip()
+        if not raw:
             return {}
 
-        # Try joining all tokens as JSON first
-        joined = " ".join(args).strip()
-        # Strip wrapping single-quotes that Windows cmd users sometimes add
-        if joined.startswith("'") and joined.endswith("'"):
-            joined = joined[1:-1]
+        # Optionally peel ONE layer of wrapping quotes — but only when they truly
+        # wrap the whole string (matching outer quotes with no same-quote inside).
+        # This lets users quote for clarity without changing the value, while
+        # leaving payloads like  'a' && 'b'  untouched.
+        unwrapped = raw
+        if (
+            len(raw) >= 2
+            and raw[0] == raw[-1]
+            and raw[0] in ("'", '"')
+            and raw[0] not in raw[1:-1]
+        ):
+            unwrapped = raw[1:-1]
+
+        # 1. JSON object ────────────────────────────────────────────────────
         try:
-            parsed = json.loads(joined)
+            parsed = json.loads(unwrapped)
             if isinstance(parsed, dict):
                 return parsed
         except json.JSONDecodeError:
             pass
 
-        # Try key=value style
-        if all("=" in a for a in args):
-            result: dict = {}
-            for a in args:
-                k, _, v = a.partition("=")
-                # Auto-type the value
-                for converter in (json.loads,):
-                    try:
-                        result[k] = converter(v)
-                        break
-                    except (json.JSONDecodeError, ValueError):
-                        result[k] = v
-            return result
+        def _auto_type(value: str):
+            """JSON-decode a scalar (int/float/bool/null), else keep as string."""
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                return value
+
+        known = set(param_names or [])
+        tokens = unwrapped.split()
+
+        # 2. key=value ───────────────────────────────────────────────────────
+        # A token counts as key=value only if it contains '=' and — when we know
+        # the schema — its key is an actual parameter. That guard stops values
+        # like "http://host/path?a=b" from being split into {"http://host/path?a": "b"}.
+        def _is_kv(token: str) -> bool:
+            if "=" not in token:
+                return False
+            key = token.partition("=")[0]
+            return not known or key in known
+
+        if tokens and all(_is_kv(t) for t in tokens):
+            return {t.partition("=")[0]: _auto_type(t.partition("=")[2]) for t in tokens}
+
+        # 3. positional ───────────────────────────────────────────────────────
+        if param_names:
+            # Single-parameter tool: the entire raw value is that one argument,
+            # verbatim — original spacing and metacharacters preserved.
+            if len(param_names) == 1:
+                return {param_names[0]: _auto_type(unwrapped)}
+            # Multi-parameter tool: one whitespace-separated token per parameter.
+            if len(tokens) <= len(param_names):
+                return {name: _auto_type(tok) for name, tok in zip(param_names, tokens)}
 
         raise ValueError(
             "Cannot parse arguments.\n"
-            "  JSON style  : call-tool <name> '{\"key\": \"value\"}'\n"
-            "  key=value   : call-tool <name> key=value key2=value2"
+            "  positional : call-tool <name> <value> [value2 ...]\n"
+            "  key=value  : call-tool <name> key=value key2=value2\n"
+            "  JSON       : call-tool <name> '{\"key\": \"value\"}'\n"
+            "  (a single-parameter tool takes the whole line as its value; quote "
+            "only when you want exact whitespace preserved)"
         )
+
+    def _tool_schema(self, tool_name: str) -> dict | None:
+        """Return a cached tool's input schema (or None if unknown)."""
+        for tool in getattr(self, "_tools", []):
+            if tool.name == tool_name:
+                return getattr(tool, "inputSchema", None)
+        return None
+
+    def _raw_args_after_tool(self, tool_name: str, fallback: list[str]) -> str:
+        """Recover the argument substring after the tool name, un-tokenised.
+
+        Uses the original input line (``self._raw_line``) so the value isn't
+        mangled by the shlex pass in ``_parse_command``. Splits only off the
+        leading command word and the tool-name token, both of which are plain
+        identifiers, then hands back everything after them verbatim.
+
+        Falls back to re-joining the already-split ``fallback`` tokens when the
+        raw line isn't available or doesn't line up (e.g. programmatic calls).
+        """
+        line = (getattr(self, "_raw_line", "") or "").strip()
+        # Strip the command word, then the tool-name token.
+        after_cmd = line.split(None, 1)
+        if len(after_cmd) == 2:
+            after_tool = after_cmd[1].split(None, 1)
+            if after_tool and after_tool[0] == tool_name:
+                return after_tool[1] if len(after_tool) == 2 else ""
+        return " ".join(fallback)
 
     async def _cmd_call_tool(self, args: list[str]):
         """Call a tool with arguments."""
         if not args:
             print_error("Usage: call-tool <name> [args]")
-            print_info("  JSON   : call-tool get_user '{\"user_id\": \"123\"}'")
-            print_info("  kv     : call-tool get_user user_id=123")
+            print_info("  positional : call-tool fetch_price_data http://host/api")
+            print_info("  kv         : call-tool fetch_price_data url=http://host/api")
+            print_info("  JSON       : call-tool fetch_price_data '{\"url\": \"http://host/api\"}'")
             return
 
         tool_name = args[0]
         tool_args = {}
 
+        # Pull the parameter order from the tool's schema so a bare positional
+        # value (e.g. just the URL) maps onto the right parameter name.
+        param_names: list[str] = []
+        schema = self._tool_schema(tool_name)
+        if schema and isinstance(schema.get("properties"), dict):
+            param_names = list(schema["properties"].keys())
+
         if len(args) > 1:
+            # Parse the value from the *raw* line, not the shlex-split tokens, so
+            # spaces / quotes / backslashes / metacharacters survive untouched.
+            raw_args = self._raw_args_after_tool(tool_name, args[1:])
             try:
-                tool_args = self._parse_tool_args(args[1:])
+                tool_args = self._parse_tool_args(raw_args, param_names)
             except ValueError as e:
                 print_error(str(e))
                 return
@@ -575,8 +660,11 @@ class InteractiveShell:
         on it) doesn't wipe out completion for the others.
         """
         try:
-            self._tool_names = [t.name for t in await self.client.list_tools()]
+            tools = await self.client.list_tools()
+            self._tools = tools
+            self._tool_names = [t.name for t in tools]
         except Exception:
+            self._tools = []
             self._tool_names = []
         try:
             self._resource_uris = [
@@ -632,6 +720,10 @@ class InteractiveShell:
 
                     if not line.strip():
                         continue
+
+                    # Stash the verbatim line so call-tool can recover its
+                    # argument string without shlex mangling (see _cmd_call_tool).
+                    self._raw_line = line
 
                     # Parse command
                     cmd, args = self._parse_command(line)
