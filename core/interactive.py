@@ -2,8 +2,21 @@
 
 import asyncio
 import json
+import os
 import shlex
 from typing import Callable
+
+# readline gives us line editing, ↑/↓ history traversal and tab-completion for
+# free on the platform's input(). It ships with CPython on Linux/macOS; on
+# Windows it lives in the optional `pyreadline3` package. If neither is present
+# the shell still works — it just loses history/completion niceties.
+try:
+    import readline
+except ImportError:  # pragma: no cover - Windows without pyreadline3
+    try:
+        import pyreadline3 as readline  # type: ignore
+    except ImportError:
+        readline = None
 
 from rich.console import Console
 from rich.panel import Panel
@@ -11,6 +24,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+from utils.logger import log
 from utils.output import print_success, print_error, print_warning, print_info
 
 
@@ -41,6 +55,23 @@ class InteractiveShell:
         self.client = client
         self.running = False
         self.history = []
+
+        # ── Tab-completion state ────────────────────────────────────────────
+        # Names are cached once at startup (and after the relevant list-*
+        # commands) so the synchronous readline completer has data to offer
+        # without needing to make async calls mid-keystroke.
+        self._tool_names: list[str] = []
+        self._tools: list = []
+        self._resource_uris: list[str] = []
+        self._prompt_names: list[str] = []
+        self._completion_matches: list[str] = []
+        self._raw_line: str = ""
+
+        # Persist ↑/↓ history across sessions (best-effort).
+        self._history_file = os.path.join(
+            os.path.expanduser("~"), ".mcploit_history"
+        )
+
         self.commands: dict[str, Callable] = {
             # Full names
             "help": self._cmd_help,
@@ -75,6 +106,12 @@ class InteractiveShell:
         banner.append(" for available commands, ", style="dim")
         banner.append("exit", style="cyan")
         banner.append(" to quit", style="dim")
+        if readline is not None:
+            banner.append("\n", style="dim")
+            banner.append("↑/↓", style="cyan")
+            banner.append(" history  ·  ", style="dim")
+            banner.append("Tab", style="cyan")
+            banner.append(" to complete commands, tools & resources", style="dim")
         console.print(Panel(banner, border_style="red"))
 
     async def _cmd_help(self, args: list[str]):
@@ -89,7 +126,7 @@ class InteractiveShell:
             ("list-resources [lr]", "List all available resources", "list-resources"),
             ("list-prompts  [lp]", "List all available prompts", "list-prompts"),
             ("call-tool    [ct]", "Call a tool with arguments",
-             "call-tool <name> [key=val ...]'{\"key\":\"val\"}'"),
+             "call-tool <name> <val> | key=val | '{\"k\":\"v\"}'"),
             ("read-resource [rr]", "Read a resource by URI", "read-resource <uri>"),
             ("get-prompt   [gp]", "Get a rendered prompt", "get-prompt <name> [key=val]"),
             ("info", "Show server information", "info"),
@@ -197,65 +234,148 @@ class InteractiveShell:
             print_error(f"Failed to list prompts: {e}")
 
     @staticmethod
-    def _parse_tool_args(args: list[str]) -> dict:
-        """Parse tool arguments from CLI tokens.
+    def _parse_tool_args(raw: str, param_names: list[str] | None = None) -> dict:
+        """Parse a tool call's raw argument string.
 
-        Accepts two formats:
-          1. JSON string  : {"key": "val"}   (must be one quoted token on Windows,
-                            or the last N unquoted tokens that together form valid JSON)
-          2. key=value pairs: key1=val1 key2=val2   (values auto-typed: int/float/bool/str)
+        ``raw`` is the portion of the command line *after the tool name*, passed
+        verbatim — it is NOT shlex-tokenised — so payloads keep their exact
+        spacing, quotes, backslashes and shell metacharacters intact. This is
+        what lets values like ``whoami;cat  flag.txt`` or ``echo \\$HOME`` reach
+        the server unchanged.
 
-        Returns parsed dict or raises ValueError with a helpful message.
+        Formats, tried in order:
+          1. JSON object   : {"key": "val"}
+          2. key=value     : key1=val1 key2=val2   (whitespace-separated)
+          3. positional    : mapped onto the tool's parameters in declaration
+                             order. A single-parameter tool receives the ENTIRE
+                             raw string as its one value.
+
+        ``param_names`` is the ordered list of the tool's parameter names (from
+        its input schema). It enables positional mapping and makes key=value
+        parsing stricter, so a value that itself contains '=' (e.g. a URL with a
+        query string) isn't mistaken for a key=value pair.
+
+        Returns the parsed dict, or raises ValueError with a helpful message.
         """
-        if not args:
+        raw = raw.strip()
+        if not raw:
             return {}
 
-        # Try joining all tokens as JSON first
-        joined = " ".join(args).strip()
-        # Strip wrapping single-quotes that Windows cmd users sometimes add
-        if joined.startswith("'") and joined.endswith("'"):
-            joined = joined[1:-1]
+        # Optionally peel ONE layer of wrapping quotes — but only when they truly
+        # wrap the whole string (matching outer quotes with no same-quote inside).
+        # This lets users quote for clarity without changing the value, while
+        # leaving payloads like  'a' && 'b'  untouched.
+        unwrapped = raw
+        if (
+            len(raw) >= 2
+            and raw[0] == raw[-1]
+            and raw[0] in ("'", '"')
+            and raw[0] not in raw[1:-1]
+        ):
+            unwrapped = raw[1:-1]
+
+        # 1. JSON object ────────────────────────────────────────────────────
         try:
-            parsed = json.loads(joined)
+            parsed = json.loads(unwrapped)
             if isinstance(parsed, dict):
                 return parsed
         except json.JSONDecodeError:
             pass
 
-        # Try key=value style
-        if all("=" in a for a in args):
-            result: dict = {}
-            for a in args:
-                k, _, v = a.partition("=")
-                # Auto-type the value
-                for converter in (json.loads,):
-                    try:
-                        result[k] = converter(v)
-                        break
-                    except (json.JSONDecodeError, ValueError):
-                        result[k] = v
-            return result
+        def _auto_type(value: str):
+            """JSON-decode a scalar (int/float/bool/null), else keep as string."""
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                return value
+
+        known = set(param_names or [])
+        tokens = unwrapped.split()
+
+        # 2. key=value ───────────────────────────────────────────────────────
+        # A token counts as key=value only if it contains '=' and — when we know
+        # the schema — its key is an actual parameter. That guard stops values
+        # like "http://host/path?a=b" from being split into {"http://host/path?a": "b"}.
+        def _is_kv(token: str) -> bool:
+            if "=" not in token:
+                return False
+            key = token.partition("=")[0]
+            return not known or key in known
+
+        if tokens and all(_is_kv(t) for t in tokens):
+            return {t.partition("=")[0]: _auto_type(t.partition("=")[2]) for t in tokens}
+
+        # 3. positional ───────────────────────────────────────────────────────
+        if param_names:
+            # Single-parameter tool: the entire raw value is that one argument,
+            # verbatim — original spacing and metacharacters preserved.
+            if len(param_names) == 1:
+                return {param_names[0]: _auto_type(unwrapped)}
+            # Multi-parameter tool: one whitespace-separated token per parameter.
+            if len(tokens) <= len(param_names):
+                return {name: _auto_type(tok) for name, tok in zip(param_names, tokens)}
 
         raise ValueError(
             "Cannot parse arguments.\n"
-            "  JSON style  : call-tool <name> '{\"key\": \"value\"}'\n"
-            "  key=value   : call-tool <name> key=value key2=value2"
+            "  positional : call-tool <name> <value> [value2 ...]\n"
+            "  key=value  : call-tool <name> key=value key2=value2\n"
+            "  JSON       : call-tool <name> '{\"key\": \"value\"}'\n"
+            "  (a single-parameter tool takes the whole line as its value; quote "
+            "only when you want exact whitespace preserved)"
         )
+
+    def _tool_schema(self, tool_name: str) -> dict | None:
+        """Return a cached tool's input schema (or None if unknown)."""
+        for tool in getattr(self, "_tools", []):
+            if tool.name == tool_name:
+                return getattr(tool, "inputSchema", None)
+        return None
+
+    def _raw_args_after_tool(self, tool_name: str, fallback: list[str]) -> str:
+        """Recover the argument substring after the tool name, un-tokenised.
+
+        Uses the original input line (``self._raw_line``) so the value isn't
+        mangled by the shlex pass in ``_parse_command``. Splits only off the
+        leading command word and the tool-name token, both of which are plain
+        identifiers, then hands back everything after them verbatim.
+
+        Falls back to re-joining the already-split ``fallback`` tokens when the
+        raw line isn't available or doesn't line up (e.g. programmatic calls).
+        """
+        line = (getattr(self, "_raw_line", "") or "").strip()
+        # Strip the command word, then the tool-name token.
+        after_cmd = line.split(None, 1)
+        if len(after_cmd) == 2:
+            after_tool = after_cmd[1].split(None, 1)
+            if after_tool and after_tool[0] == tool_name:
+                return after_tool[1] if len(after_tool) == 2 else ""
+        return " ".join(fallback)
 
     async def _cmd_call_tool(self, args: list[str]):
         """Call a tool with arguments."""
         if not args:
             print_error("Usage: call-tool <name> [args]")
-            print_info("  JSON   : call-tool get_user '{\"user_id\": \"123\"}'")
-            print_info("  kv     : call-tool get_user user_id=123")
+            print_info("  positional : call-tool fetch_price_data http://host/api")
+            print_info("  kv         : call-tool fetch_price_data url=http://host/api")
+            print_info("  JSON       : call-tool fetch_price_data '{\"url\": \"http://host/api\"}'")
             return
 
         tool_name = args[0]
         tool_args = {}
 
+        # Pull the parameter order from the tool's schema so a bare positional
+        # value (e.g. just the URL) maps onto the right parameter name.
+        param_names: list[str] = []
+        schema = self._tool_schema(tool_name)
+        if schema and isinstance(schema.get("properties"), dict):
+            param_names = list(schema["properties"].keys())
+
         if len(args) > 1:
+            # Parse the value from the *raw* line, not the shlex-split tokens, so
+            # spaces / quotes / backslashes / metacharacters survive untouched.
+            raw_args = self._raw_args_after_tool(tool_name, args[1:])
             try:
-                tool_args = self._parse_tool_args(args[1:])
+                tool_args = self._parse_tool_args(raw_args, param_names)
             except ValueError as e:
                 print_error(str(e))
                 return
@@ -442,6 +562,121 @@ class InteractiveShell:
         self.running = False
         print_info("Exiting interactive shell...")
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Line editing: history (↑/↓) and tab-completion
+    # ──────────────────────────────────────────────────────────────────────
+    def _setup_readline(self):
+        """Enable ↑/↓ history traversal and Tab completion for input().
+
+        Safe no-op when no readline implementation is available.
+        """
+        if readline is None:
+            return
+        try:
+            # Treat only whitespace as a word boundary. The default delim set
+            # includes '-', ':' and '/', which would wrongly split tokens like
+            # "list-tools" or "resource://logs" mid-word during completion.
+            readline.set_completer_delims(" \t\n")
+            readline.set_completer(self._completer)
+
+            # GNU readline and the libedit shim (common on macOS) use different
+            # syntax to bind the Tab key to completion.
+            if "libedit" in (getattr(readline, "__doc__", "") or ""):
+                readline.parse_and_bind("bind ^I rl_complete")
+            else:
+                readline.parse_and_bind("tab: complete")
+
+            readline.set_history_length(1000)
+            try:
+                readline.read_history_file(self._history_file)
+            except (FileNotFoundError, OSError):
+                pass
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug(f"readline setup skipped: {e}")
+
+    def _teardown_readline(self):
+        """Persist history to disk on exit (best-effort)."""
+        if readline is None:
+            return
+        try:
+            readline.write_history_file(self._history_file)
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug(f"Could not write history file: {e}")
+
+    def _completer(self, text: str, state: int):
+        """readline completion callback.
+
+        Called repeatedly with increasing ``state`` until it returns None.
+        We compute the full candidate list on state 0 and index into it after.
+        """
+        if readline is None:
+            return None
+        try:
+            if state == 0:
+                self._completion_matches = self._compute_completions(text)
+            if 0 <= state < len(self._completion_matches):
+                return self._completion_matches[state]
+            return None
+        except Exception:  # pragma: no cover - never let completion crash input
+            return None
+
+    def _compute_completions(self, text: str) -> list[str]:
+        """Return completion candidates for the word currently being typed.
+
+        - First word  → command names (and aliases).
+        - call-tool / ct  <TAB>   → live tool names.
+        - read-resource / rr <TAB> → live resource URIs.
+        - get-prompt / gp <TAB>   → live prompt names.
+        """
+        buffer = readline.get_line_buffer()
+        begidx = readline.get_begidx()
+        # Tokens that appear *before* the word being completed.
+        preceding = buffer[:begidx].split()
+
+        if not preceding:
+            # Completing the command itself.
+            pool = sorted(self.commands.keys())
+        elif len(preceding) == 1:
+            # Completing the first argument right after the command.
+            cmd = preceding[0].lower()
+            if cmd in ("call-tool", "ct"):
+                pool = self._tool_names
+            elif cmd in ("read-resource", "rr"):
+                pool = self._resource_uris
+            elif cmd in ("get-prompt", "gp"):
+                pool = self._prompt_names
+            else:
+                pool = []
+        else:
+            # Deeper arguments (JSON / key=value) — nothing sensible to offer.
+            pool = []
+
+        return [c for c in pool if c.startswith(text)]
+
+    async def _refresh_completion_cache(self):
+        """Pre-fetch tool/resource/prompt names for tab-completion.
+
+        Each lookup is isolated so a server that lacks one capability (or errors
+        on it) doesn't wipe out completion for the others.
+        """
+        try:
+            tools = await self.client.list_tools()
+            self._tools = tools
+            self._tool_names = [t.name for t in tools]
+        except Exception:
+            self._tools = []
+            self._tool_names = []
+        try:
+            self._resource_uris = [
+                str(r.uri) for r in await self.client.list_resources()
+            ]
+        except Exception:
+            self._resource_uris = []
+        try:
+            self._prompt_names = [p.name for p in await self.client.list_prompts()]
+        except Exception:
+            self._prompt_names = []
+
     def _parse_command(self, line: str) -> tuple[str, list[str]]:
         """Parse command line into command and arguments.
 
@@ -470,40 +705,52 @@ class InteractiveShell:
         """Run the interactive shell."""
         self.running = True
         self._print_banner()
+        self._setup_readline()
+        # Warm the completion cache so Tab works from the first keystroke.
+        await self._refresh_completion_cache()
 
-        while self.running:
-            try:
-                # _async_input runs input() in a thread executor so we don't
-                # block the asyncio event loop (plain Prompt.ask / input() would).
-                line = await _async_input("mcploit")
+        try:
+            while self.running:
+                try:
+                    # _async_input runs input() in a thread executor so we don't
+                    # block the asyncio event loop (plain Prompt.ask / input() would).
+                    # readline hooks into that input() call, giving ↑/↓ history
+                    # and Tab completion transparently.
+                    line = await _async_input("mcploit")
 
-                if not line.strip():
-                    continue
+                    if not line.strip():
+                        continue
 
-                # Parse command
-                cmd, args = self._parse_command(line)
+                    # Stash the verbatim line so call-tool can recover its
+                    # argument string without shlex mangling (see _cmd_call_tool).
+                    self._raw_line = line
 
-                if not cmd:
-                    continue
+                    # Parse command
+                    cmd, args = self._parse_command(line)
 
-                # Add to history
-                self.history.append(line)
+                    if not cmd:
+                        continue
 
-                # Execute command
-                if cmd in self.commands:
-                    await self.commands[cmd](args)
-                else:
-                    print_error(f"Unknown command: {cmd}")
-                    print_info("Type 'help' or 'h' for available commands")
+                    # Add to history
+                    self.history.append(line)
 
-            except KeyboardInterrupt:
-                console.print()
-                print_info("Use 'exit' or 'q' to quit")
-            except EOFError:
-                # Ctrl+D / pipe closed
-                self.running = False
-                break
-            except Exception as e:
-                print_error(f"Error: {e}")
+                    # Execute command
+                    if cmd in self.commands:
+                        await self.commands[cmd](args)
+                    else:
+                        print_error(f"Unknown command: {cmd}")
+                        print_info("Type 'help' or 'h' for available commands")
+
+                except KeyboardInterrupt:
+                    console.print()
+                    print_info("Use 'exit' or 'q' to quit")
+                except EOFError:
+                    # Ctrl+D / pipe closed
+                    self.running = False
+                    break
+                except Exception as e:
+                    print_error(f"Error: {e}")
+        finally:
+            self._teardown_readline()
 
         console.print()
